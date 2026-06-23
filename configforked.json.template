@@ -1,7 +1,7 @@
 {
     "working_directory": "./active",
-    "discord_token": "TOKEN GOES HERE",
-    "discord_tagline": "good evening",
+    "discord_token": "YOUR_DISCORD_BOT_TOKEN_HERE",
+    "discord_tagline": "your custom tagline here",
     "message_search_count": 15,
     "command_chain_limit": 3,
     "max_concat_count": 3,
@@ -20,20 +20,21 @@
         "help": 3
     },
     "custom_guild_timeouts": {
-        // "some guild id here": {
-        //     "default": 0
-        // }
+        "GUILD_ID_HERE": {
+            "COMMAND_NAME": 10
+        }
     },
     "custom_user_timeouts": {
-        // "some user id here": {
-            // "ghost": true, //has no effect on command timeouts
-            // "max_chain": 50
-        // }
+        "USER_ID_HERE": {
+            "ghost": false,
+            "max_chain": 50,
+            "COMMAND_NAME": 10
+        }
     },
-    "donor_guild_id": "donator guild id",
+    "donor_guild_id": "YOUR_DONOR_GUILD_ID",
     "donor_guild_check_seconds": 600,
-    "donor_teir_roles": {
-        "some role id here": {
+    "donor_tier_roles": {
+        "ROLE_ID_HERE": {
             "user": {
                 "max_chain": 5,
                 "timeout_multiplier": 0.5
@@ -42,18 +43,12 @@
                 "max_chain": 4,
                 "timeout_multiplier": 0.75
             }
-            
         }
     },
     "response_messages": [
-        "these",
-        "are",
-        "random",
-        "messages",
-        "the",
-        "bot",
-        "will",
-        "say"
+        "message one",
+        "message two",
+        "message three"
     ],
-    "meta_prefixes": ["veb", "videoeditbot", "destroy"]
+    "meta_prefixes": ["bot_prefix_1", "bot_prefix_2", "bot_prefix_3"]
 }
