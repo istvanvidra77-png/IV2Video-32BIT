@@ -1,20 +1,10 @@
-# Everytime I come back to this project I realize how bad at programming I used to be
-
-# TODO:
-#   Every 5 minutes scan, with another bot, update the donor guilds/users.
-#   Check owner of guild when processing command, apply relevent donor perks
-#   Datamosh is broken
-#   Thing likes to just not working a wholllllllle lot
-#   Actually the entire codebase sucks
-#   Rewrite the thing again to not suck and actually be readable and documented so other people can actually contribute
-
 import os, sys, time, random, discord, requests, asyncio, logging, threading
 from hashlib import sha256
 from pyjson5 import load as json_load
 from combiner import combiner
 from editor.download import download
 from collections import namedtuple, defaultdict
-from func_helper import  *
+from func_helper import Async_handler, Task, Action, swap_arg
 from functools import reduce
 from operator import add
 from editor import editor
@@ -34,7 +24,7 @@ info = lambda *args: logger.info(' | '.join(map(str, args)))
 
 config = json_load(open("config.json", 'r'))
 
-FILE_SIZE_LIMIT_MB = 10 # My internet pls
+FILE_SIZE_LIMIT_MB = 10
 
 message_search_count      = config["message_search_count"]
 command_chain_limit       = config["command_chain_limit"]
@@ -43,14 +33,14 @@ response_messages         = config["response_messages"]
 max_concat_count          = config["max_concat_count"]
 discord_token             = config["discord_token"]
 meta_prefixes             = config["meta_prefixes"]
-cookie_file               = config.setdefault("cookie_file")
+cookie_file               = config.get("cookie_file")
 
-disable_donor_check       = config.setdefault("disable_donor_check")
-disable_guild_owner_check = config.setdefault("disable_guild_owner_check")
-donor_guild_id            = config.setdefault("donor_guild_id")
-donor_teir_roles          = config.setdefault("donor_teir_roles")
-donor_guild_check_seconds = config.setdefault("donor_guild_check_seconds")
-disable_guild_owner_author_check = config.setdefault("disable_guild_owner_author_check") # bruh
+disable_donor_check       = config.get("disable_donor_check", False)
+disable_guild_owner_check = config.get("disable_guild_owner_check", False)
+donor_guild_id            = config.get("donor_guild_id")
+donor_teir_roles          = config.get("donor_teir_roles", {})
+donor_guild_check_seconds = config.get("donor_guild_check_seconds", 300)
+disable_guild_owner_author_check = config.get("disable_guild_owner_author_check", False)
 
 valid_video_extensions = ("mp4", "webm", "avi", "mkv", "mov")
 valid_image_extensions = ("png", "gif", "jpg", "jpeg")
@@ -59,7 +49,7 @@ valid_extensions = valid_video_extensions + valid_image_extensions
 hash_str = lambda s: str(sha256(s.encode()).digest().hex())[:32]
 hash_filename = lambda s: f"{hash_str((q:=os.path.splitext(s))[0])}{q[1]}"
 
-get_default = lambda v, d = config["unspecified_default_timeout"]: v["default"] if "default" in v else d
+get_default = lambda v, d = config.get("unspecified_default_timeout", 5): v.get("default", d) if isinstance(v, dict) else d
 def config_timeout(default, custom):
     default_timeout = get_default(default)
     return defaultdict(
@@ -70,8 +60,8 @@ def config_timeout(default, custom):
                 lambda: get_default(v, default_timeout), **v
             ) for k, v in custom.items()})
 
-guild_timeout_durations = config_timeout(config["default_guild_timeouts"], config["custom_guild_timeouts"])
-user_timeout_durations = config_timeout(config["default_user_timeouts"], config["custom_user_timeouts"])
+guild_timeout_durations = config_timeout(config.get("default_guild_timeouts", {}), config.get("custom_guild_timeouts", {}))
+user_timeout_durations = config_timeout(config.get("default_user_timeouts", {}), config.get("custom_user_timeouts", {}))
 guild_timeouts = defaultdict(lambda: 0)
 user_timeouts  = defaultdict(lambda: 0)
 
@@ -84,14 +74,12 @@ taskList, messageQue = [], []
 intents = discord.Intents.all()
 intents.typing = False
 intents.presences = False
-# intents.members = False
 discord_status = discord.Activity(type = discord.ActivityType.playing, name="Subscribe to @BTLE64 on YouTube")
 bot = discord.AutoShardedClient(status=discord_status, intents=intents, chunk_guilds_at_startup=False)
 
 COMMAND_COUNT_FILE = "CommandCount.dat"
 COMMAND_LOG_FILE = "CommandHistory.dat"
 
-# Load or initialize command count
 if os.path.exists(COMMAND_COUNT_FILE):
     with open(COMMAND_COUNT_FILE, "r") as f:
         try:
@@ -101,7 +89,6 @@ if os.path.exists(COMMAND_COUNT_FILE):
 else:
     command_count = 0
 
-# Start time
 start_time = time.time()
 
 def get_uptime():
@@ -120,7 +107,7 @@ class target_group:
         k = []; [k.append(i) for i in (self.attachments + self.reply + self.channel) if i not in k]
         return k
 
-def human_size(size, units="B|KB|MB|GB|TB|PB|EB".split('|')): # https://stackoverflow.com/a/43750422/14501641
+def human_size(size, units="B|KB|MB|GB|TB|PB|EB".split('|')):
     return str(size) + units[0] if size < 1024 else human_size(size >> 10, units[1:])
 
 def generate_uuid_from_msg(msg_id):
@@ -147,7 +134,7 @@ def apply_timeouts(msg, command,
             gld_id = str(msg.guild.id)
         except AttributeError:
             gld_id = '0'
-            print(f"Error aquiring guild ID for author ID {ahr_id}")
+            print(f"Error acquiring guild ID for author ID {ahr_id}")
     
     if disable_guild_owner_author_check:
         gld_own_id = '0'
@@ -159,7 +146,7 @@ def apply_timeouts(msg, command,
                 gld_own_id = str(msg.guild.owner.id)
         except AttributeError:
             gld_own_id = '0'
-            print(f"Error aquiring owner ID for guild ID {gld_id}")
+            print(f"Error acquiring owner ID for guild ID {gld_id}")
     
     if "ghost" in user_timeout_durations[ahr_id] or "ghost" in guild_timeout_durations[gld_id]:
         return True
@@ -213,17 +200,11 @@ def apply_timeouts2(msg, command,
     
     return True
 
-
-
 async def check_donors():
-    global guild_timeout_durations, user_timeout_durations
-    
-    count = 0
     while True:
         await tree.sync()
         info("🔁 Syncing command tree")
         await asyncio.sleep(donor_guild_check_seconds)
-        count += 1
 
 async def processQue():
     while True:
@@ -309,19 +290,21 @@ async def prepare_VideoEdit(msg):
 async def prepare_VideoEdit_SlashCmd(msg):
     targets = (await get_targets_slash(msg, message_search_count = message_search_count)).compile()
     if not targets:
-        await msg.og.followup.send("Unable to find a message to edit, maybe upload a video and try again?")
+        await msg[2].followup.send("Unable to find a message to edit, maybe upload a video and try again?")
         return
     
     file_ext = os.path.splitext(targets[0].filename)[1][1:]
     if file_ext not in valid_extensions:
-        await msg.og.followup.send(f":x: File type not valid, valid file types are: `{'`, `'.join(valid_extensions)}`")
+        await msg[2].followup.send(f":x: File type not valid, valid file types are: `{'`, `'.join(valid_extensions)}`")
         return
     
     return targets[0], f"{generate_uuid_folder_from_msg(msg[1])}.{file_ext}"
 
-
 async def prepare_concat(msg, args):
-    concat_count, *name_spec = params if len(params := args.split()) else '2'
+    params = args.split()
+    concat_count = params[0] if params else '2'
+    name_spec = params[1:] if len(params) > 1 else []
+    
     try:
         concat_count = min(max_concat_count, max(2, (int(concat_count) if len(concat_count.strip()) else len(msg.attachments))))
     except Exception as err:
@@ -365,7 +348,6 @@ def process_result_post(msg, res, filename = "video.mp4", prefix = None, random_
         print(f"The total amount has been increased to {command_count}")
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"{timestamp} - edited video #{command_count})\n"
-        # Save command count to file
         with open(COMMAND_COUNT_FILE, "w") as f:
             f.write(str(command_count))
         with open(COMMAND_LOG_FILE, "a") as log_file:
@@ -384,7 +366,6 @@ def process_result_post(msg, res, filename = "video.mp4", prefix = None, random_
 async def process_result_post_SlashCmd(msg, res, filename = "video.mp4", prefix = None, random_message = True):
     if res.success:
         text = random.choice(response_messages) if random_message else res.message
-        #messageQue.append(qued_msg(context = msg, filepath = res.filename, filename = hash_filename(filename), message = content, reply = True))
         if (filesize := os.path.getsize(res.filename)) >= FILE_SIZE_LIMIT_MB * 1024 ** 2:
             await msg.followup.send(f":x: Sorry, but the resulting file ({human_size(filesize)}) is over the {FILE_SIZE_LIMIT_MB}MB file size limit.")
         else:
@@ -393,7 +374,6 @@ async def process_result_post_SlashCmd(msg, res, filename = "video.mp4", prefix 
             print(f"The total amount has been increased to {command_count}")
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             log_entry = f"{timestamp} - edited video #{command_count})\n"
-            # Save command count to file
             with open(COMMAND_COUNT_FILE, "w") as f:
                 f.write(str(command_count))
             with open(COMMAND_LOG_FILE, "a") as log_file:
@@ -408,7 +388,6 @@ async def process_result_post_SlashCmd(msg, res, filename = "video.mp4", prefix 
                 content = f"{text.strip()}\n`{prefix.strip()}`\n-# **#{command_count}**\n-# {colefta} left until {next_milestone}" if prefix else f"{text.strip()}\n-# **#{command_count}**\n-# {colefta} left until {next_milestone}" 
                 await msg.followup.send(content, files=[discord.File(res.filename)], ephemeral=False)                
     else:
-        #messageQue.append(qued_msg(context = msg, message = res.message, reply = True))
         await msg.followup.send(res.message)
 
 async def parse_command(message):
@@ -454,7 +433,7 @@ async def parse_command(message):
         remainder = f"bv {remainder}"
     
     spl = command.strip().split(' ', 1)
-    cmd  = spl[0].strip()#.lower()
+    cmd  = spl[0].strip()
     args = spl[1].strip() if len(spl) > 1 else ""
     
     final_command_name = None
@@ -472,10 +451,10 @@ async def parse_command(message):
         final_command_name = "klaskysource"
     elif cmd == "sysinfo":
         final_command_name = "sysinfo"
-    elif (ev1 := (cmd in ["bv", ""])) or has_meta_prefix: # this part is janky
+    elif (ev1 := (cmd in ["bv", ""])) or has_meta_prefix:
         final_command_name = "bv"
         if not ev1 or cmd == "":
-            args = f"{spl[0].strip()} {args}" #
+            args = f"{spl[0].strip()} {args}"
 
     if not final_command_name:
         return
@@ -554,13 +533,15 @@ async def parse_command(message):
                 async_handler = async_runner,
                 persist_result_values = True
             ).run_threaded()
-            
+
 botReady = False
 tree = app_commands.CommandTree(bot)
+
 @bot.event
 async def on_ready():
     global botReady, meta_prefixes
-    if botReady: pass
+    if botReady: 
+        return
     
     meta_prefixes += [
          f"<@{bot.user.id}>",
@@ -582,10 +563,9 @@ async def on_ready():
     try:
         print("🔁 Syncing commands...")
         await tree.sync()
-        print("✅ Sucessfully synced commands")
+        print("✅ Successfully synced commands")
     except Exception as e:
-        print(e)
-
+        print(f"Error syncing commands: {e}")
 
 @bot.event
 async def on_message(msg):
@@ -608,9 +588,9 @@ async def sysinfo(message: discord.Interaction):
 @tree.command(name="download", description="Tired of using BEB's text commands? Try this out!")
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-async def download(message: discord.Interaction, args: str):
+async def download_cmd(message: discord.Interaction, args: str):
     await message.response.defer()
-    print(f"Someone summoned OpenVideoBot")
+    print(f"Someone summoned OpenVideoBot download command")
     cmd_name_opts = ["concat", "combine", "download", "downloader", "destroy"]
     
     author_id = str(message.user.id)
@@ -630,14 +610,14 @@ async def download(message: discord.Interaction, args: str):
         remainder = f"destroy {remainder}"
     
     spl = command.strip().split(' ', 1)
-    cmd  = spl[0].strip()#.lower()
+    cmd  = spl[0].strip()
     argz = spl[1].strip() if len(spl) > 1 else ""
     
     final_command_name = None
-    if (ev1 := (cmd in ["download", "downloader", ""])) or True: # this part is janky
+    if (ev1 := (cmd in ["download", "downloader", ""])):
         final_command_name = "download"
         if not ev1 or cmd == "":
-            argz = f"{spl[0].strip()} {argz}" #
+            argz = f"{spl[0].strip()} {argz}"
 
     if not final_command_name:
         await message.followup.send("Please specify a file.")
@@ -666,7 +646,7 @@ async def download(message: discord.Interaction, args: str):
 @tree.command(name="beb", description="Tired of using BeeboVideos's text commands? Try this out!")
 @app_commands.allowed_installs(guilds=True, users=True)
 @app_commands.allowed_contexts(guilds=True, dms=True, private_channels=True)
-async def ovb(message: discord.Interaction, args: str, file: discord.Attachment):
+async def beb_cmd(message: discord.Interaction, args: str, file: discord.Attachment):
     await message.response.defer()
     print(f"Someone summoned BeeboVideo")
     cmd_name_opts = ["concat", "combine", "download", "downloader", "destroy"]
@@ -688,7 +668,7 @@ async def ovb(message: discord.Interaction, args: str, file: discord.Attachment)
         remainder = f"destroy {remainder}"
     
     spl = command.strip().split(' ', 1)
-    cmd  = spl[0].strip()#.lower()
+    cmd  = spl[0].strip()
     argz = spl[1].strip() if len(spl) > 1 else ""
     
     final_command_name = None
@@ -696,10 +676,10 @@ async def ovb(message: discord.Interaction, args: str, file: discord.Attachment)
         final_command_name = "concat"
     elif cmd in ["download", "downloader"]:
         final_command_name = "download"
-    elif (ev1 := (cmd in ["destroy", ""])) or True: # this part is janky
+    elif (ev1 := (cmd in ["destroy", ""])):
         final_command_name = "destroy"
         if not ev1 or cmd == "":
-            argz = f"{spl[0].strip()} {argz}" #
+            argz = f"{spl[0].strip()} {argz}"
 
     if not final_command_name:
         await message.followup.send("Please specify a file.")
@@ -732,6 +712,6 @@ async def ovb(message: discord.Interaction, args: str, file: discord.Attachment)
                 async_handler = async_runner,
                 persist_result_values = True
                 ).run_threaded()
-            
 
-bot.run(discord_token)
+if __name__ == "__main__":
+    bot.run(discord_token)
